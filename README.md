@@ -18,8 +18,8 @@ PDFForge is a self-hosted Next.js 15 PDF toolbox inspired by iLovePDF. Uploads a
 - Admin dashboard: local stats endpoint and UI for total jobs, successful jobs, output volume, tool usage, and recent history.
 
 ## Screenshot
+<img width="2878" height="1635" alt="image" src="https://github.com/user-attachments/assets/639d628c-8014-45e6-be48-a4cdab85754c" />
 
-![PDFForge dashboard](./public/pdfforge-dashboard.svg)
 
 ## Quick Start
 
