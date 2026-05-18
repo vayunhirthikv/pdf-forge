@@ -1,0 +1,17 @@
+services:
+  pdfforge:
+    build: .
+    container_name: pdfforge
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: file:/app/storage/pdf-forge.sqlite
+      PDFFORGE_STORAGE_DIR: /app/storage
+      MAX_UPLOAD_MB: 200
+    volumes:
+      - pdfforge-storage:/app/storage
+    restart: unless-stopped
+
+volumes:
+  pdfforge-storage:
