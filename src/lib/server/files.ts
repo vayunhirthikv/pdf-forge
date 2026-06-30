@@ -27,5 +27,6 @@ export function resultHeaders(result: { name: string; type: string; meta?: Recor
     "Content-Disposition": `attachment; filename="${result.name}"`,
     "Cache-Control": "no-store",
     "X-PDFForge-Meta": JSON.stringify({ ...result.meta, inputSize, outputSize, savedBytes, savedPercent }),
+    "X-PDFForge-Name": result.name,
   };
 }

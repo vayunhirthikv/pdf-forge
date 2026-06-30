@@ -2,7 +2,7 @@
 
 import confetti from "canvas-confetti";
 import { BarChart3, Boxes, GitBranch, Moon, Play, Sun, Wrench } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import { AdminDashboard } from "@/components/admin-dashboard";
@@ -40,6 +40,8 @@ export function Workspace() {
   const [progress, setProgress] = useState(0);
   const [sourceUrl, setSourceUrl] = useState<string>();
   const [resultUrl, setResultUrl] = useState<string>();
+  const [resultName, setResultName] = useState<string>();
+  const [resultType, setResultType] = useState<string>();
   const [mode, setMode] = useState<RunMode>("single");
   const [meta, setMeta] = useState<ResultMeta>();
   const [workflowSteps, setWorkflowSteps] = useState<WorkflowStep[]>([
@@ -49,13 +51,41 @@ export function Workspace() {
   ]);
   const { theme, setTheme } = useTheme();
 
+  function clearResult() {
+    setResultUrl((current) => {
+      if (current) URL.revokeObjectURL(current);
+      return undefined;
+    });
+    setResultName(undefined);
+    setResultType(undefined);
+    setMeta(undefined);
+    setProgress(0);
+  }
+
+  function replaceFiles(updater: (current: File[]) => File[]) {
+    setFiles((current) => {
+      const next = updater(current);
+      setSourceUrl((active) => {
+        if (active) URL.revokeObjectURL(active);
+        return next[0] ? URL.createObjectURL(next[0]) : undefined;
+      });
+      clearResult();
+      return next;
+    });
+  }
+
+  useEffect(() => {
+    return () => {
+      if (sourceUrl) URL.revokeObjectURL(sourceUrl);
+      if (resultUrl) URL.revokeObjectURL(resultUrl);
+    };
+  }, [sourceUrl, resultUrl]);
+
   function selectTool(toolId: string) {
     const next = tools.find((tool) => tool.id === toolId) ?? defaultTool;
     setActiveToolId(toolId);
     setOptions(next.options);
-    setFiles([]);
-    setResultUrl(undefined);
-    setMeta(undefined);
+    replaceFiles(() => []);
   }
 
   async function processFiles() {
@@ -66,8 +96,7 @@ export function Workspace() {
 
     setBusy(true);
     setProgress(18);
-    setResultUrl(undefined);
-    setMeta(undefined);
+    clearResult();
     const formData = new FormData();
     files.forEach((file) => formData.append("files", file));
     if (mode === "workflow") {
@@ -76,7 +105,6 @@ export function Workspace() {
       formData.append("tool", activeTool.id);
       formData.append("options", JSON.stringify(options));
     }
-    setSourceUrl(URL.createObjectURL(files[0]));
 
     try {
       setProgress(42);
@@ -90,6 +118,8 @@ export function Workspace() {
       const blob = await response.blob();
       const url = URL.createObjectURL(blob);
       setResultUrl(url);
+      setResultName(response.headers.get("X-PDFForge-Name") ?? undefined);
+      setResultType(response.headers.get("Content-Type")?.split(";")[0] ?? blob.type);
       const headerMeta = response.headers.get("X-PDFForge-Meta");
       setMeta(headerMeta ? (JSON.parse(headerMeta) as ResultMeta) : undefined);
       setProgress(100);
@@ -129,7 +159,10 @@ export function Workspace() {
             ].map(([nextMode, Icon, label]) => {
               const ModeIcon = Icon as typeof Wrench;
               return (
-                <Button key={String(nextMode)} type="button" variant={mode === nextMode ? "default" : "outline"} size="sm" onClick={() => setMode(nextMode as RunMode)}>
+                <Button key={String(nextMode)} type="button" variant={mode === nextMode ? "default" : "outline"} size="sm" onClick={() => {
+                    setMode(nextMode as RunMode);
+                    clearResult();
+                  }}>
                   <ModeIcon className="h-4 w-4" />
                   {String(label)}
                 </Button>
@@ -145,8 +178,8 @@ export function Workspace() {
                 files={files}
                 accept={activeTool.accepts}
                 multiple={mode === "batch" || activeTool.multiple}
-                onFiles={(incoming) => setFiles((current) => (mode === "batch" || activeTool.multiple ? [...current, ...incoming] : incoming.slice(0, 1)))}
-                onRemove={(index) => setFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
+                onFiles={(incoming) => replaceFiles((current) => (mode === "batch" || activeTool.multiple ? [...current, ...incoming] : incoming.slice(0, 1)))}
+                onRemove={(index) => replaceFiles((current) => current.filter((_, fileIndex) => fileIndex !== index))}
               />
               {mode === "workflow" ? (
                 <WorkflowBuilder steps={workflowSteps} onChange={setWorkflowSteps} />
@@ -183,7 +216,7 @@ export function Workspace() {
                 </Button>
               </div>
             </div>
-            <PdfPreview sourceUrl={sourceUrl} resultUrl={resultUrl} />
+            <PdfPreview source={{ url: sourceUrl, name: files[0]?.name, type: files[0]?.type }} result={{ url: resultUrl, name: resultName, type: resultType }} />
           </section>
           )}
         </div>

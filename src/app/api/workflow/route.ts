@@ -57,6 +57,7 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": `attachment; filename="workflow-${final.name}"`,
         "Cache-Control": "no-store",
         "X-PDFForge-Meta": JSON.stringify({ steps: report }),
+        "X-PDFForge-Name": `workflow-${final.name}`,
       },
     });
   } catch (error) {

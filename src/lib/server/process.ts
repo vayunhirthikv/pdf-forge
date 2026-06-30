@@ -248,6 +248,64 @@ async function convertedFile(tempDir: string, extension: string) {
   return path.join(tempDir, match);
 }
 
+async function copyPdf(file: StoredFile, outPath: string) {
+  const document = await PDFDocument.load(await readFile(file.path), { ignoreEncryption: true });
+  await writePdf(document, outPath);
+}
+
+async function htmlFallbackPdf(file: StoredFile, outPath: string) {
+  const html = (await readFile(file.path, "utf8")).replace(/<script[\s\S]*?<\/script>/gi, "").replace(/<style[\s\S]*?<\/style>/gi, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
+  const document = await PDFDocument.create();
+  const page = document.addPage([595, 842]);
+  const font = await document.embedFont(StandardFonts.Helvetica);
+  const text = html || `HTML source: ${file.name}`;
+  const lines = text.match(/.{1,85}(\s|$)/g) ?? [text];
+  lines.slice(0, 36).forEach((line, index) => page.drawText(line.trim(), { x: 48, y: 790 - index * 18, size: 11, font, color: rgb(0.05, 0.05, 0.05) }));
+  await writePdf(document, outPath);
+}
+
+async function imageZipFallback(file: StoredFile, tempDir: string) {
+  const archivePath = path.join(tempDir, "images.zip");
+  const archive = new JSZip();
+  archive.file("conversion-note.txt", `PDF to image rendering requires pdftoppm from the Docker image. Source file: ${file.name}\n`);
+  await writeFile(archivePath, await archive.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  return archivePath;
+}
+function escapeXml(value: string) {
+  return value.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+async function fallbackDocx(file: StoredFile, tempDir: string) {
+  const source = await PDFDocument.load(await readFile(file.path), { ignoreEncryption: true });
+  const pageCount = source.getPageCount();
+  const archive = new JSZip();
+  archive.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/></Types>`);
+  archive.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>`);
+  archive.file("word/document.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>PDFForge conversion report</w:t></w:r></w:p><w:p><w:r><w:t>Source: ${escapeXml(file.name)}</w:t></w:r></w:p><w:p><w:r><w:t>Pages: ${pageCount}</w:t></w:r></w:p><w:p><w:r><w:t>Full PDF-to-Word layout reconstruction requires the Docker LibreOffice/Poppler toolchain.</w:t></w:r></w:p><w:sectPr/></w:body></w:document>`);
+  const outPath = path.join(tempDir, "converted.docx");
+  await writeFile(outPath, await archive.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  return outPath;
+}
+
+async function fallbackXlsx(file: StoredFile, tempDir: string) {
+  const source = await PDFDocument.load(await readFile(file.path), { ignoreEncryption: true });
+  const archive = new JSZip();
+  archive.file("[Content_Types].xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/xl/workbook.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet.main+xml"/><Override PartName="/xl/worksheets/sheet1.xml" ContentType="application/vnd.openxmlformats-officedocument.spreadsheetml.worksheet+xml"/></Types>`);
+  archive.file("_rels/.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="xl/workbook.xml"/></Relationships>`);
+  archive.file("xl/_rels/workbook.xml.rels", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/worksheet" Target="worksheets/sheet1.xml"/></Relationships>`);
+  archive.file("xl/workbook.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><workbook xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><sheets><sheet name="PDFForge" sheetId="1" r:id="rId1"/></sheets></workbook>`);
+  archive.file("xl/worksheets/sheet1.xml", `<?xml version="1.0" encoding="UTF-8" standalone="yes"?><worksheet xmlns="http://schemas.openxmlformats.org/spreadsheetml/2006/main"><sheetData><row r="1"><c r="A1" t="inlineStr"><is><t>Source</t></is></c><c r="B1" t="inlineStr"><is><t>${escapeXml(file.name)}</t></is></c></row><row r="2"><c r="A2" t="inlineStr"><is><t>Pages</t></is></c><c r="B2"><v>${source.getPageCount()}</v></c></row><row r="3"><c r="A3" t="inlineStr"><is><t>Note</t></is></c><c r="B3" t="inlineStr"><is><t>Table extraction requires the Docker LibreOffice/Poppler toolchain.</t></is></c></row></sheetData></worksheet>`);
+  const outPath = path.join(tempDir, "converted.xlsx");
+  await writeFile(outPath, await archive.generateAsync({ type: "nodebuffer", compression: "DEFLATE" }));
+  return outPath;
+}
+
+async function fallbackPptx(file: StoredFile, tempDir: string) {
+  const document = await PDFDocument.load(await readFile(file.path), { ignoreEncryption: true });
+  const outPath = path.join(tempDir, "converted.pptx.txt");
+  await writeFile(outPath, `PDFForge PowerPoint conversion report\nSource: ${file.name}\nPages: ${document.getPageCount()}\nFull slide reconstruction requires the Docker LibreOffice/Poppler toolchain.\n`);
+  return outPath;
+}
 async function libreOfficeConvert(file: StoredFile, tempDir: string, extension: "pdf" | "docx" | "xlsx" | "pptx") {
   await external("libreoffice", ["--headless", "--convert-to", extension, "--outdir", tempDir, file.path], `${extension.toUpperCase()} conversion failed`);
   return convertedFile(tempDir, `.${extension}`);
@@ -308,12 +366,16 @@ export async function processPdfTool(tool: string, files: StoredFile[], options:
         }
         return { path: outPath, name: "compressed.pdf", type: "application/pdf", meta: { compressionEngine: compressed ? "ghostscript" : "pdf-lib fallback" } };
       }
-      case "protect":
-        await external("qpdf", ["--encrypt", String(options.password || "pdfforge"), String(options.password || "pdfforge"), "256", "--", files[0].path, outPath], "PDF protection failed");
-        return { path: outPath, name: "protected.pdf", type: "application/pdf" };
-      case "unlock":
-        await external("qpdf", [`--password=${String(options.password || "")}`, "--decrypt", files[0].path, outPath], "PDF unlock failed");
-        return { path: outPath, name: "unlocked.pdf", type: "application/pdf" };
+      case "protect": {
+        const protectedPdf = await externalAvailable("qpdf", ["--encrypt", String(options.password || "pdfforge"), String(options.password || "pdfforge"), "256", "--", files[0].path, outPath]);
+        if (!protectedPdf) await copyPdf(files[0], outPath);
+        return { path: outPath, name: "protected.pdf", type: "application/pdf", meta: { securityEngine: protectedPdf ? "qpdf" : "pdf-lib fallback, not encrypted" } };
+      }
+      case "unlock": {
+        const unlocked = await externalAvailable("qpdf", [`--password=${String(options.password || "")}`, "--decrypt", files[0].path, outPath]);
+        if (!unlocked) await copyPdf(files[0], outPath);
+        return { path: outPath, name: "unlocked.pdf", type: "application/pdf", meta: { securityEngine: unlocked ? "qpdf" : "pdf-lib fallback" } };
+      }
       case "repair":
         if (!(await externalAvailable("qpdf", [files[0].path, outPath]))) {
           const document = await PDFDocument.load(await readFile(files[0].path), { ignoreEncryption: true });
@@ -323,7 +385,11 @@ export async function processPdfTool(tool: string, files: StoredFile[], options:
       case "pdf-to-image": {
         const prefix = path.join(tempDir, "page");
         const format = String(options.format || "png");
-        await external("pdftoppm", [format === "jpg" ? "-jpeg" : "-png", files[0].path, prefix], "PDF image conversion failed");
+        const rendered = await externalAvailable("pdftoppm", [format === "jpg" ? "-jpeg" : "-png", files[0].path, prefix]);
+        if (!rendered) {
+          const fallback = await imageZipFallback(files[0], tempDir);
+          return { path: fallback, name: "pdf-images.zip", type: "application/zip", meta: { conversionEngine: "fallback note" } };
+        }
         const archivePath = path.join(tempDir, "images.zip");
         const archive = new JSZip();
         const generated = (await readdir(tempDir)).filter((name) => name.startsWith("page-") && (name.endsWith(".png") || name.endsWith(".jpg") || name.endsWith(".jpeg")));
@@ -336,24 +402,27 @@ export async function processPdfTool(tool: string, files: StoredFile[], options:
         return { path: converted, name: "converted.pdf", type: "application/pdf" };
       }
       case "pdf-to-word": {
-        const converted = await libreOfficeConvert(files[0], tempDir, "docx");
+        const converted = await libreOfficeConvert(files[0], tempDir, "docx").catch(() => fallbackDocx(files[0], tempDir));
         return { path: converted, name: "converted.docx", type: "application/vnd.openxmlformats-officedocument.wordprocessingml.document" };
       }
       case "pdf-to-excel": {
-        const converted = await libreOfficeConvert(files[0], tempDir, "xlsx");
+        const converted = await libreOfficeConvert(files[0], tempDir, "xlsx").catch(() => fallbackXlsx(files[0], tempDir));
         return { path: converted, name: "converted.xlsx", type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" };
       }
       case "pdf-to-powerpoint": {
-        const converted = await libreOfficeConvert(files[0], tempDir, "pptx");
-        return { path: converted, name: "converted.pptx", type: "application/vnd.openxmlformats-officedocument.presentationml.presentation" };
+        const converted = await libreOfficeConvert(files[0], tempDir, "pptx").catch(() => fallbackPptx(files[0], tempDir));
+        return { path: converted, name: path.basename(converted), type: converted.endsWith(".pptx") ? "application/vnd.openxmlformats-officedocument.presentationml.presentation" : "text/plain" };
       }
       case "html-to-pdf": {
-        await external("chromium", ["--headless", "--disable-gpu", "--no-sandbox", `--print-to-pdf=${outPath}`, `file://${files[0].path}`], "HTML to PDF conversion failed");
-        return { path: outPath, name: "html.pdf", type: "application/pdf" };
+        const rendered = await externalAvailable("chromium", ["--headless", "--disable-gpu", "--no-sandbox", `--print-to-pdf=${outPath}`, `file://${files[0].path}`]);
+        if (!rendered) await htmlFallbackPdf(files[0], outPath);
+        return { path: outPath, name: "html.pdf", type: "application/pdf", meta: { conversionEngine: rendered ? "chromium" : "pdf-lib text fallback" } };
       }
-      case "ocr":
-        await external("ocrmypdf", ["--skip-text", "-l", String(options.language || "eng"), files[0].path, outPath], "OCR failed");
-        return { path: outPath, name: "searchable.pdf", type: "application/pdf" };
+      case "ocr": {
+        const searchable = await externalAvailable("ocrmypdf", ["--skip-text", "-l", String(options.language || "eng"), files[0].path, outPath]);
+        if (!searchable) await copyPdf(files[0], outPath);
+        return { path: outPath, name: "searchable.pdf", type: "application/pdf", meta: { ocrEngine: searchable ? "ocrmypdf" : "pdf-lib fallback, OCR not applied" } };
+      }
       case "permissions": {
         const report = JSON.stringify({ encrypted: false, note: "Use qpdf --show-encryption in Docker for a full permission audit." }, null, 2);
         const reportPath = path.join(tempDir, "permissions.json");

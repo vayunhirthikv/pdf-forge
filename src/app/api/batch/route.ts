@@ -50,6 +50,7 @@ export async function POST(request: NextRequest) {
         "Content-Disposition": `attachment; filename="batch-results.zip"`,
         "Cache-Control": "no-store",
         "X-PDFForge-Meta": JSON.stringify({ files: written.length, report: reports }),
+        "X-PDFForge-Name": "batch-results.zip",
       },
     });
   } catch (error) {
